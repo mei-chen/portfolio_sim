@@ -92,7 +92,7 @@ def calculate_combined_volume(stock_data_dict, weights):
     return pd.DataFrame(portfolio_volumes).set_index('date')
 
 def display_synchronized_charts(stock_data_dict, weights, portfolio_df):
-    """Display price and volume charts with synchronized hover effects"""
+    """Display price and volume charts with synchronized hover effects and matching x-axes"""
     st.markdown("""
     <style>
         .stPlotlyChart {
@@ -103,6 +103,10 @@ def display_synchronized_charts(stock_data_dict, weights, portfolio_df):
 
     # Calculate combined volume
     combined_volume_df = calculate_combined_volume(stock_data_dict, weights)
+    
+    # Find the complete date range
+    all_dates = sorted(portfolio_df.index)
+    x_range = [all_dates[0], all_dates[-1]]
     
     # Create price chart
     price_fig = go.Figure()
@@ -132,15 +136,6 @@ def display_synchronized_charts(stock_data_dict, weights, portfolio_df):
         line=dict(width=3)
     ))
 
-    price_fig.update_layout(
-        title="Portfolio Price Performance (Normalized to 100)",
-        yaxis_title="Value",
-        xaxis_title="Date",
-        template="plotly_white",
-        hovermode="x unified",
-        height=400
-    )
-
     # Create volume chart
     volume_fig = go.Figure()
     
@@ -168,13 +163,10 @@ def display_synchronized_charts(stock_data_dict, weights, portfolio_df):
         name="Combined Volume",
         line=dict(width=3)
     ))
-    
-    volume_fig.update_layout(
-        title="Trading Volume (Normalized to 100)",
-        yaxis_title="Volume Index",
-        xaxis_title="Date",
+
+    # Common layout settings for both charts
+    common_layout = dict(
         template="plotly_white",
-        hovermode="x unified",
         height=400,
         showlegend=True,
         legend=dict(
@@ -182,45 +174,145 @@ def display_synchronized_charts(stock_data_dict, weights, portfolio_df):
             y=0.99,
             xanchor="left",
             x=0.01
-        )
+        ),
+        hovermode="x unified",
+        xaxis=dict(
+            range=x_range,
+            showspikes=True,
+            spikemode='across',
+            spikesnap='cursor',
+            showline=True,
+            showgrid=True,
+            rangeslider=dict(visible=False),
+            type='date'
+        ),
+        hoverdistance=1,
+        dragmode='zoom',
+        spikedistance=1000
     )
 
-    # Add synchronized range slider and crosshair
-    price_fig.update_xaxes(rangeslider_visible=False)
-    volume_fig.update_xaxes(rangeslider_visible=False)
-
-    # Add synchronized hover
+    # Update price chart layout
     price_fig.update_layout(
-        xaxis=dict(
-            showspikes=True,
-            spikemode='across',
-            spikesnap='cursor',
-            showline=True,
-            showgrid=True
-        ),
-        hoverdistance=1
+        title="Portfolio Price Performance (Normalized to 100)",
+        yaxis_title="Value",
+        xaxis_title="",  # Remove x-axis title from top chart
+        **common_layout
     )
 
+    # Update volume chart layout
     volume_fig.update_layout(
-        xaxis=dict(
-            showspikes=True,
-            spikemode='across',
-            spikesnap='cursor',
-            showline=True,
-            showgrid=True
-        ),
-        hoverdistance=1
+        title="Trading Volume (Normalized to 100)",
+        yaxis_title="Volume Index",
+        xaxis_title="Date",
+        **common_layout
     )
 
-    # Display charts
-    price_chart = st.container()
-    volume_chart = st.container()
-
-    with price_chart:
+    # Create containers and display charts
+    col1, col2 = st.columns([1, 15])  # This creates space for y-axis labels
+    with col2:
         st.plotly_chart(price_fig, use_container_width=True, key="price")
-
-    with volume_chart:
         st.plotly_chart(volume_fig, use_container_width=True, key="volume")
+
+    # Add JavaScript for synchronized zooming and panning
+    # Add JavaScript for enhanced synchronization
+    st.markdown("""
+    <script>
+        function waitForCharts(callback) {
+            const interval = setInterval(() => {
+                const charts = document.querySelectorAll('[data-testid="stPlotlyChart"] .js-plotly-plot');
+                if (charts.length >= 2) {
+                    clearInterval(interval);
+                    callback(charts[0], charts[1]);
+                }
+            }, 100);
+        }
+
+        waitForCharts((priceChart, volumeChart) => {
+            if (!priceChart || !volumeChart) return;
+
+            function synchronizeHover(eventData) {
+                const xValue = eventData.xvals[0];
+                
+                // Find nearest points on both charts
+                const priceData = priceChart.data;
+                const volumeData = volumeChart.data;
+                
+                // Create hover data for both charts
+                const priceHoverData = priceData.map((_, i) => ({
+                    curveNumber: i,
+                    pointNumber: findNearestPoint(priceData[i].x, xValue)
+                }));
+                
+                const volumeHoverData = volumeData.map((_, i) => ({
+                    curveNumber: i,
+                    pointNumber: findNearestPoint(volumeData[i].x, xValue)
+                }));
+
+                // Trigger hover on both charts
+                Plotly.Fx.hover(priceChart, priceHoverData);
+                Plotly.Fx.hover(volumeChart, volumeHoverData);
+            }
+
+            function findNearestPoint(xArray, target) {
+                if (!xArray || !xArray.length) return 0;
+                
+                let nearest = 0;
+                let minDiff = Math.abs(new Date(xArray[0]) - new Date(target));
+                
+                for (let i = 1; i < xArray.length; i++) {
+                    const diff = Math.abs(new Date(xArray[i]) - new Date(target));
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        nearest = i;
+                    }
+                }
+                return nearest;
+            }
+
+            // Add mouse move event listener to container
+            const container = document.querySelector('.stPlotlyChart');
+            container.addEventListener('mousemove', (e) => {
+                const rect = priceChart.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
+                    const xaxis = priceChart._fullLayout.xaxis;
+                    const xValue = xaxis.p2d(x);
+                    
+                    synchronizeHover({ xvals: [xValue] });
+                }
+            });
+
+            // Sync zoom and pan events
+            priceChart.on('plotly_relayout', (eventdata) => {
+                if (eventdata['xaxis.range[0]']) {
+                    const update = {
+                        'xaxis.range[0]': eventdata['xaxis.range[0]'],
+                        'xaxis.range[1]': eventdata['xaxis.range[1]']
+                    };
+                    Plotly.relayout(volumeChart, update);
+                }
+            });
+
+            volumeChart.on('plotly_relayout', (eventdata) => {
+                if (eventdata['xaxis.range[0]']) {
+                    const update = {
+                        'xaxis.range[0]': eventdata['xaxis.range[0]'],
+                        'xaxis.range[1]': eventdata['xaxis.range[1]']
+                    };
+                    Plotly.relayout(priceChart, update);
+                }
+            });
+
+            // Handle mouse leave
+            container.addEventListener('mouseleave', () => {
+                Plotly.Fx.unhover(priceChart);
+                Plotly.Fx.unhover(volumeChart);
+            });
+        });
+    </script>
+    """, unsafe_allow_html=True)
 
     # Display statistics
     st.subheader("Trading Statistics")
